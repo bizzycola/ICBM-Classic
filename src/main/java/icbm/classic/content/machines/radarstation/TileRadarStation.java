@@ -1,6 +1,9 @@
 package icbm.classic.content.machines.radarstation;
 
 import com.builtbroken.jlib.data.vector.IPos3D;
+import com.builtbroken.jlib.data.vector.Pos3D;
+import dan200.computercraft.api.lua.ILuaContext;
+import dan200.computercraft.api.lua.LuaException;
 import icbm.classic.api.tile.IRadioWaveSender;
 import icbm.classic.content.explosive.Explosives;
 import icbm.classic.content.missile.EntityMissile;
@@ -27,11 +30,15 @@ import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
+import dan200.computercraft.api.peripheral.*;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
-public class TileRadarStation extends TileFrequency implements IPacketIDReceiver, IRadioWaveSender, IGuiTile, IInventoryProvider<ExternalInventory>
+public class TileRadarStation extends TileFrequency implements IPacketIDReceiver, IRadioWaveSender, IGuiTile, IInventoryProvider<ExternalInventory>, IPeripheral, IPeripheralTile
 {
     /** Max range the radar station will attempt to find targets inside */
     public final static int MAX_DETECTION_RANGE = 500;
@@ -53,6 +60,7 @@ public class TileRadarStation extends TileFrequency implements IPacketIDReceiver
     protected List<Pos> guiDrawPoints = new ArrayList();
     protected RadarObjectType[] types;
     protected boolean updateDrawList = true;
+    protected ArrayList<IComputerAccess> attachedComputers = new ArrayList<>();
 
     @Override
     public ExternalInventory getInventory()
@@ -92,6 +100,12 @@ public class TileRadarStation extends TileFrequency implements IPacketIDReceiver
                 //Check for incoming and launch anti-missiles if
                 if (this.ticks % 20 == 0 && this.incomingMissiles.size() > 0) //TODO track if a anti-missile is already in air to hit target
                 {
+                    //Fire off(pun certainly intended) an event to any attached CC computers regarding the incoming missile.
+                    ArrayList<CCReturnRadarStation> ccMissiles = new ArrayList<>();
+                    for(EntityMissile missile: this.incomingMissiles)
+                        ccMissiles.add(new CCReturnRadarStation(missile.posX, missile.posY, missile.posZ, missile.getName()));
+                    queueComputerCraftEvent("incomingMissile", new Object[]{ ccMissiles });
+
                     RadioRegistry.popMessage(world, this, getFrequency(), "fireAntiMissile", this.incomingMissiles.get(0));
                 }
             }
@@ -424,5 +438,88 @@ public class TileRadarStation extends TileFrequency implements IPacketIDReceiver
     public Object getClientGuiElement(int ID, EntityPlayer player)
     {
         return new GuiRadarStation(player, this);
+    }
+
+    /* ComputerCraft Integration */
+    @Override
+    public String[] getMethodNames()
+    {
+        return new String[] { "getEntities", "getMissiles" };
+    }
+
+    @Override
+    public String getType()
+    {
+        return "RadarStation";
+    }
+
+    /** Implements ComputerCraft method evocation. */
+    @Override
+    public Object[] callMethod(@Nonnull IComputerAccess computer, @Nonnull ILuaContext context, int method, @Nonnull Object[] arguments ) throws LuaException
+    {
+        if(!this.checkExtract())
+            throw new LuaException("The radar station does not have enough energy to run.");
+
+        switch(method)
+        {
+            // getEntities - returns a list of living entities within the radar stations range
+            // including the position of the entities and the entity name.
+            case 0:
+                List<Entity> entities = RadarRegistry.getAllLivingObjectsWithin(world, xi() + 1.5, yi() + 0.5, zi() + 0.5, Math.min(alarmRange, MAX_DETECTION_RANGE));
+                ArrayList<CCReturnRadarStation> returnArray = new ArrayList<>();
+
+                for(Entity ent : entities)
+                    returnArray.add(new CCReturnRadarStation(ent.posX, ent.posY, ent.posZ, ent.getName()));
+
+                return new Object[] {returnArray};
+
+            // getMissiles - Similar to above but only returns missiles(except anti-ballistic missiles)
+            case 1:
+                List<Entity> entitiesM = RadarRegistry.getAllLivingObjectsWithin(world, xi() + 1.5, yi() + 0.5, zi() + 0.5, Math.min(alarmRange, MAX_DETECTION_RANGE));
+                ArrayList<CCReturnRadarStation> returnArrayM = new ArrayList<>();
+
+                for(Entity ent : entitiesM)
+                    if (ent instanceof EntityMissile && ((EntityMissile) ent).getExplosiveType() != Explosives.MISSILE_ANTI.handler)
+                        returnArrayM.add(new CCReturnRadarStation(ent.posX, ent.posY, ent.posZ, ent.getName()));
+
+                return new Object[] {returnArrayM};
+        }
+
+        throw new LuaException("No valid RadarStation method called.");
+    }
+
+    protected void queueComputerCraftEvent(String event, Object[] args)
+    {
+        for(IComputerAccess comp : attachedComputers)
+            comp.queueEvent(event, args);
+    }
+
+    @Override
+    public void attach( @Nonnull IComputerAccess computer )
+    {
+        if(!attachedComputers.contains(computer))
+            attachedComputers.add(computer);
+    }
+
+    @Override
+    public void detach( @Nonnull IComputerAccess computer )
+    {
+        if(attachedComputers.contains(computer))
+            attachedComputers.remove(computer);
+    }
+
+    @Override
+    public IPeripheral getPeripheral( @Nonnull EnumFacing side )
+    {
+        return this;
+    }
+
+    @Override
+    public boolean equals( @Nullable IPeripheral other )
+    {
+        if(other != null && other == this)
+            return true;
+
+        return false;
     }
 }

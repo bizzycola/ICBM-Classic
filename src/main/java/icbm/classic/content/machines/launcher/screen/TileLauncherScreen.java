@@ -1,6 +1,11 @@
 package icbm.classic.content.machines.launcher.screen;
 
 import com.builtbroken.jlib.data.vector.IPos3D;
+import dan200.computercraft.api.lua.ILuaContext;
+import dan200.computercraft.api.lua.LuaException;
+import dan200.computercraft.api.peripheral.IComputerAccess;
+import dan200.computercraft.api.peripheral.IPeripheral;
+import dan200.computercraft.api.peripheral.IPeripheralTile;
 import icbm.classic.api.energy.IEnergyBufferProvider;
 import icbm.classic.api.explosion.ILauncherController;
 import icbm.classic.api.explosion.LauncherType;
@@ -25,12 +30,16 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.text.TextComponentString;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+import java.util.ArrayList;
+
 /**
  * This tile entity is for the screen of the missile launcher
  *
  * @author Calclavia
  */
-public class TileLauncherScreen extends TileLauncherPrefab implements IPacketIDReceiver, ILauncherController, IEnergyBufferProvider, IInventoryProvider<ExternalInventory>
+public class TileLauncherScreen extends TileLauncherPrefab implements IPacketIDReceiver, ILauncherController, IEnergyBufferProvider, IInventoryProvider<ExternalInventory>, IPeripheral, IPeripheralTile
 {
     // The missile launcher base in which this
     // screen is connected with
@@ -42,6 +51,8 @@ public class TileLauncherScreen extends TileLauncherPrefab implements IPacketIDR
     public ExternalInventory inventory;
 
     public int launchDelay = 0;
+    protected ArrayList<IComputerAccess> attachedComputers = new ArrayList<>();
+
 
     @Override
     public ExternalInventory getInventory()
@@ -202,6 +213,8 @@ public class TileLauncherScreen extends TileLauncherPrefab implements IPacketIDR
 
             //Mark client for update
             updateClient = true;
+
+            queueComputerCraftEvent("missileLaunched", null);
         }
     }
 
@@ -340,5 +353,104 @@ public class TileLauncherScreen extends TileLauncherPrefab implements IPacketIDR
                 }
             }
         }
+    }
+
+
+    /* ComputerCraft Integration */
+    @Override
+    public String[] getMethodNames()
+    {
+        return new String[] { "launch", "getTarget", "setTarget", "canLaunch", "getMissile", "getStatus" };
+    }
+
+    @Override
+    public Object[] callMethod(@Nonnull IComputerAccess computer, @Nonnull ILuaContext context, int method, @Nonnull Object[] arguments ) throws LuaException
+    {
+        switch(method)
+        {
+            case 0:
+                this.launch();
+            case 1:
+                return new Object[]{ this.getTarget().x(), this.getTarget().y(), this.getTarget().z() };
+            case 2:
+                try {
+                    if (arguments[0] != null && arguments[1] != null && arguments[2] != null)
+                        this.setTarget(new Pos((Double)arguments[0], (Double)arguments[1], (Double)arguments[2]));
+                    else
+                        throw new LuaException("Must provide 3 doubles for x,y,z on setTarget.");
+
+                }
+                catch (Exception ex)
+                {
+                     throw new LuaException("Must provide 3 doubles for x,y,z on setTarget.");
+                }
+
+            case 3:
+                return new Object[]{ this.canLaunch() };
+
+            case 4:
+                try
+                {
+                    return new Object[] {this.launcherBase.getMissileStack().getDisplayName()};
+                }
+                catch (Exception ex)
+                {
+                    return null;
+                }
+
+            case 5:
+                return new Object[]{ this.getStatus() };
+
+        }
+
+        throw new LuaException("No valid ICBM Launcher method called.");
+    }
+
+    protected void queueComputerCraftEvent(String event, Object[] args)
+    {
+        for(IComputerAccess comp : attachedComputers)
+            comp.queueEvent(event, args);
+    }
+
+    @Override
+    public void attach( @Nonnull IComputerAccess computer )
+    {
+        if(!attachedComputers.contains(computer))
+            attachedComputers.add(computer);
+    }
+
+    @Override
+    public void detach( @Nonnull IComputerAccess computer )
+    {
+        if(attachedComputers.contains(computer))
+            attachedComputers.remove(computer);
+    }
+
+    @Override
+    public String getType()
+    {
+        EnumTier tier = getTier();
+        String ts = "1";
+        if(tier == EnumTier.TWO)
+            ts = "2";
+        else if(tier == EnumTier.THREE)
+            ts = "3";
+
+        return "ICBMLauncher_Tier" + ts;
+    }
+
+    @Override
+    public IPeripheral getPeripheral( @Nonnull EnumFacing side )
+    {
+        return this;
+    }
+
+    @Override
+    public boolean equals( @Nullable IPeripheral other )
+    {
+        if(other != null && other == this)
+            return true;
+
+        return false;
     }
 }
